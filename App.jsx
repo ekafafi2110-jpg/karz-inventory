@@ -4,6 +4,8 @@ import { addDoc, collection, doc, getDocs, orderBy, query, serverTimestamp, upda
 
 const FIREBASE_COLLECTION = "inventory";
 const DRAFT_KEY = "karz_latest_draft";
+const ROLE_KEY = "karz_user_role";
+const LOGIN_CODES = { employee: "1234", manager: "9999" };
 
 const INITIAL_SECTIONS = {
   "العبوات": { icon:"📦", color:"#C8A96E", items:[
@@ -32,6 +34,32 @@ function orderCount(orders={}){ return Object.values(orders||{}).filter(v=>Numbe
 
 function Modal({title,onClose,children}){ return <div className="modal"><button className="modal-backdrop" onClick={onClose}/><div className="modal-card"><div className="modal-header"><strong>{title}</strong><button className="icon-btn" onClick={onClose}>✕</button></div>{children}</div></div>; }
 
+function LoginScreen({onLogin}){
+  const [mode,setMode]=useState("employee");
+  const [code,setCode]=useState("");
+  const [error,setError]=useState("");
+  function submit(){
+    if(code.trim()===LOGIN_CODES[mode]) onLogin(mode);
+    else setError("الكود غير صحيح");
+  }
+  return <main className="app">
+    <header className="top"><div><p>نظام الجرد</p><h1>🍒 كرز وعنب</h1></div></header>
+    <section className="content">
+      <div className="card modal-content">
+        <h3>تسجيل الدخول</h3>
+        <p className="muted">اختر نوع الدخول. الموظف يرى شاشة الجرد فقط، والمدير يرى كل التبويبات.</p>
+        <div className="actions">
+          <button className={mode==="employee"?"primary":"secondary"} onClick={()=>{setMode("employee");setCode("");setError("");}}>موظف</button>
+          <button className={mode==="manager"?"primary":"secondary"} onClick={()=>{setMode("manager");setCode("");setError("");}}>مدير</button>
+        </div>
+        <input type="password" inputMode="numeric" placeholder={mode==="employee"?"كود الموظف":"كود المدير"} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}} />
+        {error && <p style={{color:"#F44336"}}>{error}</p>}
+        <button className="primary wide" onClick={submit}>دخول</button>
+      </div>
+    </section>
+  </main>;
+}
+
 function SnapshotCard({snap}){
   const [open,setOpen]=useState(false); if(!validSnapshot(snap))return null; const orders=snap.managerOrders||{};
   return <div className="card history-card"><button className="history-head" onClick={()=>setOpen(!open)}><div><strong>{snap.date}</strong><span className="tag blue">موافق عليه</span><p>{snap.branch||"فرع أبو زهرة"} — {orderCount(orders)>0?`طلب المدير ${orderCount(orders)} صنف`:"اطلع المدير بدون طلبية"}</p></div><span>{open?"⌃":"⌄"}</span></button>{open&&<div className="history-body">{Object.entries(snap.sections).map(([sk,sec])=><div key={sk}><h4>{sec.icon} {sk}</h4>{sec.items.map(it=>{ const emp=snap.quantities?.[sk]?.[it.id]; const st=getStatus(emp,it.minQty); const manager=orders[`${sk}-${it.id}`]; return <div className="row small" key={it.id}><span>{it.name}</span><strong className={st}>الموجود: {emp===""||emp===undefined?"—":emp} {it.unit}</strong><small>{Number(manager)>0?`المطلوب: ${manager} ${it.unit}`:"لا طلب"}</small></div>; })}</div>)}</div>}</div>;
@@ -58,8 +86,13 @@ export default function App(){
   const [newItem,setNewItem]=useState({name:"",unit:"حبة",minQty:5});
   const [addingSec,setAddingSec]=useState(false);
   const [newSec,setNewSec]=useState({name:"",icon:"📦",color:"#C8A96E"});
+  const [role,setRole]=useState(()=>localStorage.getItem(ROLE_KEY)||"");
 
   useEffect(()=>{ loadHistory(); try{ const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"); if(d?.quantities)setQuantities(d.quantities); }catch{} },[]);
+  useEffect(()=>{ if(role==="employee" && activeTab!=="جرد") setActiveTab("جرد"); },[role,activeTab]);
+
+  function login(nextRole){ localStorage.setItem(ROLE_KEY,nextRole); setRole(nextRole); setActiveTab("جرد"); }
+  function logout(){ localStorage.removeItem(ROLE_KEY); setRole(""); setActiveTab("جرد"); }
 
   async function loadHistory(){ try{ const q=query(collection(db,FIREBASE_COLLECTION),orderBy("createdAt","desc")); const snap=await getDocs(q); setHistory(snap.docs.map(doc=>({firestoreId:doc.id,...doc.data()})).filter(validSnapshot)); }catch(e){ console.error(e); showToast("تعذر تحميل السجل من Firebase"); } }
   function showToast(m){ setToast(m); setTimeout(()=>setToast(""),2500); }
@@ -67,7 +100,8 @@ export default function App(){
   const enteredCount=allItems.filter(x=>x.val!=="").length;
   const pending=history.filter(s=>s.status==="submitted");
   const reviewed=history.filter(s=>s.status==="reviewed");
-  const tabs=[{key:"جرد",label:"جرد"},{key:"الإدارة",label:"الإدارة",badge:pending.length},{key:"السجل",label:"السجل",badge:reviewed.length},{key:"إعدادات",label:"إعدادات"}];
+  const managerTabs=[{key:"جرد",label:"جرد"},{key:"الإدارة",label:"الإدارة",badge:pending.length},{key:"السجل",label:"السجل",badge:reviewed.length},{key:"إعدادات",label:"إعدادات"}];
+  const tabs=role==="employee"?[{key:"جرد",label:"جرد"}]:managerTabs;
   function setQty(sk,id,v){ setQuantities(p=>({...p,[sk]:{...p[sk],[id]:v}})); }
   function resetInventory(){ setQuantities(emptyQty(sections)); localStorage.removeItem(DRAFT_KEY); }
   function saveDraft(){ const snap={id:Date.now(),date:todayStr(),status:"draft",branch:"فرع أبو زهرة",sections,quantities}; localStorage.setItem(DRAFT_KEY,JSON.stringify(snap)); showToast("تم حفظ الجرد كمسودة على هذا الجهاز"); }
@@ -78,15 +112,17 @@ export default function App(){
   function addSection(){ const name=newSec.name.trim(); if(!name)return showToast("أدخل اسم القسم"); if(sections[name])return showToast("القسم موجود مسبقًا"); setSections(p=>({...p,[name]:{icon:newSec.icon||"📦",color:newSec.color||"#C8A96E",items:[]}})); setQuantities(p=>({...p,[name]:{}})); setNewSec({name:"",icon:"📦",color:"#C8A96E"}); setAddingSec(false); }
   function deleteSection(sk){ if(!confirm(`حذف قسم ${sk}؟`))return; setSections(p=>{ const c={...p}; delete c[sk]; return c; }); setQuantities(p=>{ const c={...p}; delete c[sk]; return c; }); }
 
+  if(!role) return <LoginScreen onLogin={login}/>;
+
   return <main className="app">
-    <header className="top"><div><p>فرع أبو زهرة — {todayStr()}</p><h1>🍒 كرز وعنب</h1></div><div className="counter"><strong>{enteredCount}/{allItems.length}</strong><span>تم إدخاله</span></div></header>
+    <header className="top"><div><p>فرع أبو زهرة — {todayStr()} — {role==="manager"?"مدير":"موظف"}</p><h1>🍒 كرز وعنب</h1></div><div className="counter"><strong>{enteredCount}/{allItems.length}</strong><span>تم إدخاله</span><button className="icon-btn" onClick={logout}>خروج</button></div></header>
     <div className="progress"><span style={{width:`${allItems.length?(enteredCount/allItems.length)*100:0}%`}}/></div>
     <nav className="tabs">{tabs.map(t=><button key={t.key} className={activeTab===t.key?"active":""} onClick={()=>setActiveTab(t.key)}>{t.label}{!!t.badge&&<em>{t.badge}</em>}</button>)}</nav>
     <section className="content">
       {activeTab==="جرد"&&<><div className="note">شاشة الموظف: أدخل أرقام الجرد. حفظ = مسودة للرجوع لاحقًا. إرسال للمدير = إرسال للإدارة وتصفير الشاشة.</div>{Object.entries(sections).map(([sk,sec])=>{ const isOpen=openSection===sk; const ent=sec.items.filter(it=>quantities[sk]?.[it.id]!=="").length; return <div className="section-card" key={sk}><button className="section-head" style={{borderColor:sec.color}} onClick={()=>setOpenSection(isOpen?"":sk)}><span className="emoji">{sec.icon}</span><span><strong style={{color:sec.color}}>{sk}</strong><small>{ent}/{sec.items.length} صنف</small></span><b>{isOpen?"⌃":"⌄"}</b></button>{isOpen&&<div className="items">{sec.items.map(it=>{ const v=quantities[sk]?.[it.id]??""; const st=getStatus(v,it.minQty); return <div className={`item ${st}`} key={it.id}><div><strong>{it.name}</strong><small>{it.unit} — حد أدنى {it.minQty}</small></div><input inputMode="decimal" type="number" value={v} placeholder="العدد" onChange={e=>setQty(sk,it.id,e.target.value)}/></div>; })}</div>}</div>; })}</>}
-      {activeTab==="الإدارة"&&<><div className="note blue">شاشة الإدارة: يظهر هنا فقط الجرد الذي يحتاج إجراء. بعد اطلعت أو حفظ لقطة المدير ينتقل مباشرة إلى السجل.</div>{pending.length===0?<div className="empty">لا توجد جرود بانتظار الإدارة</div>:pending.map(s=><ManagerSnapshot key={s.firestoreId||s.id} snap={s} onDone={loadHistory}/>)}</>}
-      {activeTab==="السجل"&&<><div className="note">السجل: فقط الجرود التي اعتمدها المدير. يظهر رقم الموظف ورقم طلب المدير إن وجد.</div>{reviewed.length===0?<div className="empty">لا توجد جرود معتمدة في السجل بعد</div>:reviewed.map(s=><SnapshotCard key={s.firestoreId||s.id} snap={s}/>)}</>}
-      {activeTab==="إعدادات"&&<div><div className="note">إدارة الأقسام والأصناف: إضافة قسم، إضافة صنف، تعديل الحد الأدنى، وحذف.</div>{Object.entries(sections).map(([sk,sec])=><div className="card" key={sk}><div className="supplier-head"><button onClick={()=>setSettingsOpen(settingsOpen===sk?null:sk)}><span>{sec.icon} {sk}</span></button><button onClick={()=>deleteSection(sk)}>حذف القسم</button></div>{settingsOpen===sk&&<div className="modal-content">{sec.items.map(it=><div className="row" key={it.id}><span>{it.name} ({it.unit})</span><input type="number" value={it.minQty} onChange={e=>editMin(sk,it.id,e.target.value)} style={{width:65,borderRadius:8,padding:5,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55"}}/><button onClick={()=>deleteItem(sk,it.id)}>حذف</button></div>)}<div className="summary"><input placeholder="اسم الصنف" value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))}/><select value={newItem.unit} onChange={e=>setNewItem(p=>({...p,unit:e.target.value}))}>{["حبة","كجم","لتر","علبة","باكيت","قالب","ربطة"].map(u=><option key={u}>{u}</option>)}</select><input type="number" value={newItem.minQty} onChange={e=>setNewItem(p=>({...p,minQty:e.target.value}))}/><button className="primary" onClick={()=>addItem(sk)}>إضافة صنف</button></div></div>}</div>)}{addingSec?<div className="card modal-content"><input placeholder="اسم القسم" value={newSec.name} onChange={e=>setNewSec(p=>({...p,name:e.target.value}))}/><input placeholder="الأيقونة" value={newSec.icon} onChange={e=>setNewSec(p=>({...p,icon:e.target.value}))}/><input type="color" value={newSec.color} onChange={e=>setNewSec(p=>({...p,color:e.target.value}))}/><button className="primary wide" onClick={addSection}>إضافة القسم</button></div>:<button className="secondary wide" onClick={()=>setAddingSec(true)}>+ إضافة قسم جديد</button>}</div>}
+      {role==="manager"&&activeTab==="الإدارة"&&<><div className="note blue">شاشة الإدارة: يظهر هنا فقط الجرد الذي يحتاج إجراء. بعد اطلعت أو حفظ لقطة المدير ينتقل مباشرة إلى السجل.</div>{pending.length===0?<div className="empty">لا توجد جرود بانتظار الإدارة</div>:pending.map(s=><ManagerSnapshot key={s.firestoreId||s.id} snap={s} onDone={loadHistory}/>)}</>}
+      {role==="manager"&&activeTab==="السجل"&&<><div className="note">السجل: فقط الجرود التي اعتمدها المدير. يظهر رقم الموظف ورقم طلب المدير إن وجد.</div>{reviewed.length===0?<div className="empty">لا توجد جرود معتمدة في السجل بعد</div>:reviewed.map(s=><SnapshotCard key={s.firestoreId||s.id} snap={s}/>)}</>}
+      {role==="manager"&&activeTab==="إعدادات"&&<div><div className="note">إدارة الأقسام والأصناف: إضافة قسم، إضافة صنف، تعديل الحد الأدنى، وحذف.</div>{Object.entries(sections).map(([sk,sec])=><div className="card" key={sk}><div className="supplier-head"><button onClick={()=>setSettingsOpen(settingsOpen===sk?null:sk)}><span>{sec.icon} {sk}</span></button><button onClick={()=>deleteSection(sk)}>حذف القسم</button></div>{settingsOpen===sk&&<div className="modal-content">{sec.items.map(it=><div className="row" key={it.id}><span>{it.name} ({it.unit})</span><input type="number" value={it.minQty} onChange={e=>editMin(sk,it.id,e.target.value)} style={{width:65,borderRadius:8,padding:5,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55"}}/><button onClick={()=>deleteItem(sk,it.id)}>حذف</button></div>)}<div className="summary"><input placeholder="اسم الصنف" value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))}/><select value={newItem.unit} onChange={e=>setNewItem(p=>({...p,unit:e.target.value}))}>{["حبة","كجم","لتر","علبة","باكيت","قالب","ربطة"].map(u=><option key={u}>{u}</option>)}</select><input type="number" value={newItem.minQty} onChange={e=>setNewItem(p=>({...p,minQty:e.target.value}))}/><button className="primary" onClick={()=>addItem(sk)}>إضافة صنف</button></div></div>}</div>)}{addingSec?<div className="card modal-content"><input placeholder="اسم القسم" value={newSec.name} onChange={e=>setNewSec(p=>({...p,name:e.target.value}))}/><input placeholder="الأيقونة" value={newSec.icon} onChange={e=>setNewSec(p=>({...p,icon:e.target.value}))}/><input type="color" value={newSec.color} onChange={e=>setNewSec(p=>({...p,color:e.target.value}))}/><button className="primary wide" onClick={addSection}>إضافة القسم</button></div>:<button className="secondary wide" onClick={()=>setAddingSec(true)}>+ إضافة قسم جديد</button>}</div>}
     </section>
     {activeTab==="جرد"&&<footer className="bottom"><button className="secondary" disabled={loading} onClick={saveDraft}>💾 حفظ</button><button className="primary" disabled={loading} onClick={()=>setSendOpen(true)}>📤 إرسال للمدير</button></footer>}
     {sendOpen&&<Modal title="إرسال الجرد للمدير" onClose={()=>setSendOpen(false)}><div className="modal-content"><p>سيتم إرسال لقطة كاملة من شاشة الجرد للإدارة، ثم تصفير شاشة الموظف.</p><button className="primary wide" disabled={loading} onClick={submitToManager}>تأكيد الإرسال</button></div></Modal>}
