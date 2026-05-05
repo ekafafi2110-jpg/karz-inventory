@@ -265,13 +265,13 @@ export default function App() {
         id: Date.now(),
         date: todayStr(),
         sentByEmployee,
-        branch: "فرع أبو زهرة",
+        branch: "فرع الفويسمة",
         sections: JSON.parse(JSON.stringify(sections)),
         quantities: JSON.parse(JSON.stringify(quantities)),
         createdAt: serverTimestamp()
       };
 
-      await addDoc(collection(db, "inventoryHistory"), snap);
+      await addDoc(collection(db, "inventory"), snap);
       setHistory(prev => [{ ...snap, createdAt: new Date().toISOString() }, ...prev]);
       showToast(sentByEmployee ? "تم الإرسال والحفظ في Firebase" : "تم حفظ الجرد في Firebase");
     } catch (error) {
