@@ -3,9 +3,16 @@ import { db } from "./firebase";
 import { addDoc, collection, doc, getDocs, orderBy, query, serverTimestamp, updateDoc } from "firebase/firestore";
 
 const FIREBASE_COLLECTION = "inventory";
+const USERS_COLLECTION = "users";
 const DRAFT_KEY = "karz_latest_draft";
 const ROLE_KEY = "karz_user_role";
-const LOGIN_CODES = { employee: "1234", manager: "9999" };
+const USER_NAME_KEY = "karz_user_name";
+const USER_ID_KEY = "karz_user_id";
+
+const DEFAULT_USERS = [
+  { id:"default-employee", name:"موظف", role:"employee", password:"1234", isDefault:true },
+  { id:"default-manager", name:"مدير", role:"manager", password:"9999", isDefault:true }
+];
 
 const INITIAL_SECTIONS = {
   "العبوات": { icon:"📦", color:"#C8A96E", items:[
@@ -34,35 +41,22 @@ function orderCount(orders={}){ return Object.values(orders||{}).filter(v=>Numbe
 
 function Modal({title,onClose,children}){ return <div className="modal"><button className="modal-backdrop" onClick={onClose}/><div className="modal-card"><div className="modal-header"><strong>{title}</strong><button className="icon-btn" onClick={onClose}>✕</button></div>{children}</div></div>; }
 
-function LoginScreen({onLogin}){
-  const [mode,setMode]=useState("employee");
+function LoginScreen({users,onLogin}){
+  const [selectedId,setSelectedId]=useState(users[0]?.id||"");
   const [code,setCode]=useState("");
   const [error,setError]=useState("");
+  const selected=users.find(u=>u.id===selectedId)||users[0];
   function submit(){
-    if(code.trim()===LOGIN_CODES[mode]) onLogin(mode);
-    else setError("الكود غير صحيح");
+    if(!selected){ setError("لا يوجد مستخدم"); return; }
+    if(code.trim()===String(selected.password||"")) onLogin(selected);
+    else setError("الرقم السري غير صحيح");
   }
-  return <main className="app">
-    <header className="top"><div><p>نظام الجرد</p><h1>🍒 كرز وعنب</h1></div></header>
-    <section className="content">
-      <div className="card modal-content">
-        <h3>تسجيل الدخول</h3>
-        <p className="muted">اختر نوع الدخول. الموظف يرى شاشة الجرد فقط، والمدير يرى كل التبويبات.</p>
-        <div className="actions">
-          <button className={mode==="employee"?"primary":"secondary"} onClick={()=>{setMode("employee");setCode("");setError("");}}>موظف</button>
-          <button className={mode==="manager"?"primary":"secondary"} onClick={()=>{setMode("manager");setCode("");setError("");}}>مدير</button>
-        </div>
-        <input type="password" inputMode="numeric" placeholder={mode==="employee"?"كود الموظف":"كود المدير"} value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}} />
-        {error && <p style={{color:"#F44336"}}>{error}</p>}
-        <button className="primary wide" onClick={submit}>دخول</button>
-      </div>
-    </section>
-  </main>;
+  return <main className="app"><header className="top"><div><p>نظام الجرد</p><h1>🍒 كرز وعنب</h1></div></header><section className="content"><div className="card modal-content"><h3>تسجيل الدخول</h3><p className="muted">اختر اسم المستخدم ثم أدخل الرقم السري.</p><select value={selectedId} onChange={e=>{setSelectedId(e.target.value);setCode("");setError("");}}>{users.map(u=><option key={u.id} value={u.id}>{u.name} — {u.role==="manager"?"مدير":"موظف"}</option>)}</select><input type="password" inputMode="numeric" placeholder="الرقم السري" value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}} />{error&&<p style={{color:"#F44336"}}>{error}</p>}<button className="primary wide" onClick={submit}>دخول</button></div></section></main>;
 }
 
 function SnapshotCard({snap}){
   const [open,setOpen]=useState(false); if(!validSnapshot(snap))return null; const orders=snap.managerOrders||{};
-  return <div className="card history-card"><button className="history-head" onClick={()=>setOpen(!open)}><div><strong>{snap.date}</strong><span className="tag blue">موافق عليه</span><p>{snap.branch||"فرع أبو زهرة"} — {orderCount(orders)>0?`طلب المدير ${orderCount(orders)} صنف`:"اطلع المدير بدون طلبية"}</p></div><span>{open?"⌃":"⌄"}</span></button>{open&&<div className="history-body">{Object.entries(snap.sections).map(([sk,sec])=><div key={sk}><h4>{sec.icon} {sk}</h4>{sec.items.map(it=>{ const emp=snap.quantities?.[sk]?.[it.id]; const st=getStatus(emp,it.minQty); const manager=orders[`${sk}-${it.id}`]; return <div className="row small" key={it.id}><span>{it.name}</span><strong className={st}>الموجود: {emp===""||emp===undefined?"—":emp} {it.unit}</strong><small>{Number(manager)>0?`المطلوب: ${manager} ${it.unit}`:"لا طلب"}</small></div>; })}</div>)}</div>}</div>;
+  return <div className="card history-card"><button className="history-head" onClick={()=>setOpen(!open)}><div><strong>{snap.date}</strong><span className="tag blue">موافق عليه</span><p>{snap.branch||"فرع أبو زهرة"} — {snap.employeeName?`الموظف: ${snap.employeeName} — `:""}{orderCount(orders)>0?`طلب المدير ${orderCount(orders)} صنف`:"اطلع المدير بدون طلبية"}</p>{snap.employeeNote&&<p style={{color:"#F0C987"}}>ملاحظة الموظف: {snap.employeeNote}</p>}</div><span>{open?"⌃":"⌄"}</span></button>{open&&<div className="history-body">{Object.entries(snap.sections).map(([sk,sec])=><div key={sk}><h4>{sec.icon} {sk}</h4>{sec.items.map(it=>{ const emp=snap.quantities?.[sk]?.[it.id]; const st=getStatus(emp,it.minQty); const manager=orders[`${sk}-${it.id}`]; return <div className="row small" key={it.id}><span>{it.name}</span><strong className={st}>الموجود: {emp===""||emp===undefined?"—":emp} {it.unit}</strong><small>{Number(manager)>0?`المطلوب: ${manager} ${it.unit}`:"لا طلب"}</small></div>; })}</div>)}</div>}</div>;
 }
 
 function ManagerSnapshot({snap,onDone}){
@@ -70,7 +64,13 @@ function ManagerSnapshot({snap,onDone}){
   function supplierText(sk){ const sec=snap.sections[sk]; const lines=sec.items.filter(it=>Number(order[`${sk}-${it.id}`]||0)>0).map(it=>`• ${it.name}: ${order[`${sk}-${it.id}`]} ${it.unit}`).join("\n"); return `السلام عليكم، يرجى تزويدنا بالطلبية التالية:\n${sk}\n\n${lines}\n\nكرز وعنب`; }
   function sendSupplier(sk){ const text=supplierText(sk); if(!text.includes("•")){ alert("أدخل كمية طلب واحدة على الأقل في هذا القسم"); return; } window.open("https://wa.me/?text="+encodeURIComponent(text),"_blank"); }
   async function closeReview(type){ if(!snap.firestoreId){alert("لا يوجد معرف للحفظ"); return;} setBusy(true); try{ await updateDoc(doc(db,FIREBASE_COLLECTION,snap.firestoreId),{status:"reviewed",sentByEmployee:false,reviewType:type,managerOrders:type==="seen"?{}:order,reviewedAt:serverTimestamp()}); alert(type==="seen"?"تم نقل الجرد إلى السجل":"تم حفظ لقطة المدير ونقلها إلى السجل"); onDone(); }catch(e){ console.error(e); alert("تعذر الحفظ"); }finally{ setBusy(false); } }
-  return <div className="card history-card"><button className="history-head" onClick={()=>setOpen(!open)}><div><strong>{snap.date}</strong><span className="tag blue">بانتظار الإدارة</span><p>{snap.branch||"فرع أبو زهرة"} — جرد الموظف ظاهر لكل صنف</p></div><span>{open?"⌃":"⌄"}</span></button>{open&&<div className="history-body"><div className="actions"><button className="secondary" disabled={busy} onClick={()=>closeReview("seen")}>✅ اطلعت</button><button className="primary" disabled={busy} onClick={()=>closeReview("ordered")}>💾 حفظ لقطة المدير</button></div>{Object.entries(snap.sections).map(([sk,sec])=>{ const secOpen=openSec===sk; return <div className="section-card" key={sk}><button className="section-head" style={{borderColor:sec.color}} onClick={()=>setOpenSec(secOpen?null:sk)}><span className="emoji">{sec.icon}</span><span><strong style={{color:sec.color}}>{sk}</strong><small>{sec.items.length} صنف</small></span><b>{secOpen?"⌃":"⌄"}</b></button>{secOpen&&<div className="items"><div className="row small"><span>الصنف</span><strong>جرد الموظف</strong><small>طلب المدير</small></div>{sec.items.map(it=>{ const emp=snap.quantities?.[sk]?.[it.id]; const st=getStatus(emp,it.minQty); return <div className={`row ${st}`} key={it.id}><span>{it.name}</span><strong>{emp===""||emp===undefined?"—":emp} {it.unit}</strong><input type="number" inputMode="decimal" placeholder="طلب" value={order[`${sk}-${it.id}`]||""} onChange={e=>setOrder(p=>({...p,[`${sk}-${it.id}`]:e.target.value}))} style={{width:72,borderRadius:10,padding:7,background:"#1A1A2E",color:"#fff",border:"1px solid #C8A96E55",textAlign:"center"}}/></div>; })}<button className="primary wide" onClick={()=>sendSupplier(sk)}>📲 إرسال هذا القسم للمورد</button></div>}</div>; })}</div>}</div>;
+  return <div className="card history-card"><button className="history-head" onClick={()=>setOpen(!open)}><div><strong>{snap.date}</strong><span className="tag blue">بانتظار الإدارة</span><p>{snap.branch||"فرع أبو زهرة"} — {snap.employeeName?`الموظف: ${snap.employeeName}`:"جرد موظف"}</p>{snap.employeeNote&&<p style={{color:"#F0C987"}}>ملاحظة الموظف: {snap.employeeNote}</p>}</div><span>{open?"⌃":"⌄"}</span></button>{open&&<div className="history-body"><div className="actions"><button className="secondary" disabled={busy} onClick={()=>closeReview("seen")}>✅ اطلعت</button><button className="primary" disabled={busy} onClick={()=>closeReview("ordered")}>💾 حفظ لقطة المدير</button></div>{Object.entries(snap.sections).map(([sk,sec])=>{ const secOpen=openSec===sk; return <div className="section-card" key={sk}><button className="section-head" style={{borderColor:sec.color}} onClick={()=>setOpenSec(secOpen?null:sk)}><span className="emoji">{sec.icon}</span><span><strong style={{color:sec.color}}>{sk}</strong><small>{sec.items.length} صنف</small></span><b>{secOpen?"⌃":"⌄"}</b></button>{secOpen&&<div className="items"><div className="row small"><span>الصنف</span><strong>جرد الموظف</strong><small>طلب المدير</small></div>{sec.items.map(it=>{ const emp=snap.quantities?.[sk]?.[it.id]; const st=getStatus(emp,it.minQty); return <div className={`row ${st}`} key={it.id}><span>{it.name}</span><strong>{emp===""||emp===undefined?"—":emp} {it.unit}</strong><input type="number" inputMode="decimal" placeholder="طلب" value={order[`${sk}-${it.id}`]||""} onChange={e=>setOrder(p=>({...p,[`${sk}-${it.id}`]:e.target.value}))} style={{width:72,borderRadius:10,padding:7,background:"#1A1A2E",color:"#fff",border:"1px solid #C8A96E55",textAlign:"center"}}/></div>; })}<button className="primary wide" onClick={()=>sendSupplier(sk)}>📲 إرسال هذا القسم للمورد</button></div>}</div>; })}</div>}</div>;
+}
+
+function UserManagement({users,onAddUser,onUpdatePassword}){
+  const [newUser,setNewUser]=useState({name:"",role:"employee",password:""});
+  const [edits,setEdits]=useState({});
+  return <div className="card modal-content"><h3>صلاحيات المستخدمين</h3><p className="muted">المدير يستطيع إضافة موظف أو مدير وتغيير الرقم السري للمستخدمين المضافين.</p><div className="summary"><input placeholder="اسم المستخدم" value={newUser.name} onChange={e=>setNewUser(p=>({...p,name:e.target.value}))}/><select value={newUser.role} onChange={e=>setNewUser(p=>({...p,role:e.target.value}))}><option value="employee">موظف</option><option value="manager">مدير</option></select><input type="password" inputMode="numeric" placeholder="رقم سري" value={newUser.password} onChange={e=>setNewUser(p=>({...p,password:e.target.value}))}/><button className="primary" onClick={async()=>{ const ok=await onAddUser(newUser); if(ok)setNewUser({name:"",role:"employee",password:""}); }}>إضافة مستخدم</button></div>{users.map(u=><div className="row" key={u.id}><span>{u.name} — {u.role==="manager"?"مدير":"موظف"}{u.isDefault?" (أساسي)":""}</span><input type="password" inputMode="numeric" placeholder={u.isDefault?"غير قابل للتغيير":"رقم جديد"} disabled={u.isDefault} value={edits[u.id]||""} onChange={e=>setEdits(p=>({...p,[u.id]:e.target.value}))} style={{width:95,borderRadius:8,padding:5,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55"}}/><button disabled={u.isDefault} onClick={async()=>{ await onUpdatePassword(u,edits[u.id]); setEdits(p=>({...p,[u.id]:""})); }}>تغيير</button></div>)}</div>;
 }
 
 export default function App(){
@@ -87,12 +87,21 @@ export default function App(){
   const [addingSec,setAddingSec]=useState(false);
   const [newSec,setNewSec]=useState({name:"",icon:"📦",color:"#C8A96E"});
   const [role,setRole]=useState(()=>localStorage.getItem(ROLE_KEY)||"");
+  const [currentUserName,setCurrentUserName]=useState(()=>localStorage.getItem(USER_NAME_KEY)||"");
+  const [currentUserId,setCurrentUserId]=useState(()=>localStorage.getItem(USER_ID_KEY)||"");
+  const [users,setUsers]=useState([]);
+  const [employeeNote,setEmployeeNote]=useState("");
 
-  useEffect(()=>{ loadHistory(); try{ const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"); if(d?.quantities)setQuantities(d.quantities); }catch{} },[]);
+  useEffect(()=>{ loadUsers(); loadHistory(); try{ const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"); if(d?.quantities)setQuantities(d.quantities); if(d?.employeeNote)setEmployeeNote(d.employeeNote); }catch{} },[]);
   useEffect(()=>{ if(role==="employee" && activeTab!=="جرد") setActiveTab("جرد"); },[role,activeTab]);
 
-  function login(nextRole){ localStorage.setItem(ROLE_KEY,nextRole); setRole(nextRole); setActiveTab("جرد"); }
-  function logout(){ localStorage.removeItem(ROLE_KEY); setRole(""); setActiveTab("جرد"); }
+  const allUsers=[...DEFAULT_USERS,...users];
+  function login(user){ localStorage.setItem(ROLE_KEY,user.role); localStorage.setItem(USER_NAME_KEY,user.name); localStorage.setItem(USER_ID_KEY,user.id); setRole(user.role); setCurrentUserName(user.name); setCurrentUserId(user.id); setActiveTab("جرد"); }
+  function logout(){ localStorage.removeItem(ROLE_KEY); localStorage.removeItem(USER_NAME_KEY); localStorage.removeItem(USER_ID_KEY); setRole(""); setCurrentUserName(""); setCurrentUserId(""); setActiveTab("جرد"); }
+
+  async function loadUsers(){ try{ const snap=await getDocs(collection(db,USERS_COLLECTION)); setUsers(snap.docs.map(d=>({id:d.id,firestoreId:d.id,...d.data()}))); }catch(e){ console.error(e); showToast("تعذر تحميل المستخدمين"); } }
+  async function addUser(user){ if(!user.name.trim()||!user.password.trim()){ showToast("أدخل الاسم والرقم السري"); return false; } try{ await addDoc(collection(db,USERS_COLLECTION),{name:user.name.trim(),role:user.role,password:user.password.trim(),createdAt:serverTimestamp()}); await loadUsers(); showToast("تمت إضافة المستخدم"); return true; }catch(e){ console.error(e); showToast("تعذر إضافة المستخدم"); return false; } }
+  async function updateUserPassword(user,newPassword){ if(!newPassword||!newPassword.trim()){ showToast("أدخل الرقم الجديد"); return; } if(user.isDefault){ showToast("المستخدم الأساسي لا يعدل من هنا"); return; } try{ await updateDoc(doc(db,USERS_COLLECTION,user.firestoreId),{password:newPassword.trim(),updatedAt:serverTimestamp()}); await loadUsers(); showToast("تم تغيير الرقم السري"); }catch(e){ console.error(e); showToast("تعذر تغيير الرقم"); } }
 
   async function loadHistory(){ try{ const q=query(collection(db,FIREBASE_COLLECTION),orderBy("createdAt","desc")); const snap=await getDocs(q); setHistory(snap.docs.map(doc=>({firestoreId:doc.id,...doc.data()})).filter(validSnapshot)); }catch(e){ console.error(e); showToast("تعذر تحميل السجل من Firebase"); } }
   function showToast(m){ setToast(m); setTimeout(()=>setToast(""),2500); }
@@ -103,29 +112,29 @@ export default function App(){
   const managerTabs=[{key:"جرد",label:"جرد"},{key:"الإدارة",label:"الإدارة",badge:pending.length},{key:"السجل",label:"السجل",badge:reviewed.length},{key:"إعدادات",label:"إعدادات"}];
   const tabs=role==="employee"?[{key:"جرد",label:"جرد"}]:managerTabs;
   function setQty(sk,id,v){ setQuantities(p=>({...p,[sk]:{...p[sk],[id]:v}})); }
-  function resetInventory(){ setQuantities(emptyQty(sections)); localStorage.removeItem(DRAFT_KEY); }
-  function saveDraft(){ const snap={id:Date.now(),date:todayStr(),status:"draft",branch:"فرع أبو زهرة",sections,quantities}; localStorage.setItem(DRAFT_KEY,JSON.stringify(snap)); showToast("تم حفظ الجرد كمسودة على هذا الجهاز"); }
-  async function submitToManager(){ setLoading(true); try{ const snap={id:Date.now(),date:todayStr(),status:"submitted",sentByEmployee:true,branch:"فرع أبو زهرة",sections:JSON.parse(JSON.stringify(sections)),quantities:JSON.parse(JSON.stringify(quantities)),createdAt:serverTimestamp()}; await addDoc(collection(db,FIREBASE_COLLECTION),snap); resetInventory(); await loadHistory(); showToast("تم إرسال الجرد للإدارة وتصفير الشاشة"); }catch(e){ console.error(e); showToast("حدث خطأ أثناء الإرسال"); }finally{ setLoading(false); setSendOpen(false); } }
+  function resetInventory(){ setQuantities(emptyQty(sections)); setEmployeeNote(""); localStorage.removeItem(DRAFT_KEY); }
+  function saveDraft(){ const snap={id:Date.now(),date:todayStr(),status:"draft",branch:"فرع أبو زهرة",employeeName:currentUserName,employeeId:currentUserId,employeeNote,sections,quantities}; localStorage.setItem(DRAFT_KEY,JSON.stringify(snap)); showToast("تم حفظ الجرد كمسودة على هذا الجهاز"); }
+  async function submitToManager(){ setLoading(true); try{ const snap={id:Date.now(),date:todayStr(),status:"submitted",sentByEmployee:true,branch:"فرع أبو زهرة",employeeName:currentUserName||"موظف",employeeId:currentUserId,employeeNote:employeeNote.trim(),sections:JSON.parse(JSON.stringify(sections)),quantities:JSON.parse(JSON.stringify(quantities)),createdAt:serverTimestamp()}; await addDoc(collection(db,FIREBASE_COLLECTION),snap); resetInventory(); await loadHistory(); showToast("تم إرسال الجرد للإدارة وتصفير الشاشة"); }catch(e){ console.error(e); showToast("حدث خطأ أثناء الإرسال"); }finally{ setLoading(false); setSendOpen(false); } }
   function deleteItem(sk,id){ setSections(p=>({...p,[sk]:{...p[sk],items:p[sk].items.filter(i=>i.id!==id)}})); setQuantities(p=>{ const c={...(p[sk]||{})}; delete c[id]; return {...p,[sk]:c}; }); }
   function addItem(sk){ if(!newItem.name.trim())return showToast("أدخل اسم الصنف"); const id="x"+Date.now(); const it={id,name:newItem.name.trim(),unit:newItem.unit,minQty:Number(newItem.minQty)||1}; setSections(p=>({...p,[sk]:{...p[sk],items:[...p[sk].items,it]}})); setQuantities(p=>({...p,[sk]:{...(p[sk]||{}),[id]:""}})); setNewItem({name:"",unit:"حبة",minQty:5}); showToast("تمت إضافة الصنف"); }
   function editMin(sk,id,v){ setSections(p=>({...p,[sk]:{...p[sk],items:p[sk].items.map(i=>i.id===id?{...i,minQty:Number(v)||0}:i)}})); }
   function addSection(){ const name=newSec.name.trim(); if(!name)return showToast("أدخل اسم القسم"); if(sections[name])return showToast("القسم موجود مسبقًا"); setSections(p=>({...p,[name]:{icon:newSec.icon||"📦",color:newSec.color||"#C8A96E",items:[]}})); setQuantities(p=>({...p,[name]:{}})); setNewSec({name:"",icon:"📦",color:"#C8A96E"}); setAddingSec(false); }
   function deleteSection(sk){ if(!confirm(`حذف قسم ${sk}؟`))return; setSections(p=>{ const c={...p}; delete c[sk]; return c; }); setQuantities(p=>{ const c={...p}; delete c[sk]; return c; }); }
 
-  if(!role) return <LoginScreen onLogin={login}/>;
+  if(!role) return <LoginScreen users={allUsers} onLogin={login}/>;
 
   return <main className="app">
-    <header className="top"><div><p>فرع أبو زهرة — {todayStr()} — {role==="manager"?"مدير":"موظف"}</p><h1>🍒 كرز وعنب</h1></div><div className="counter"><strong>{enteredCount}/{allItems.length}</strong><span>تم إدخاله</span><button className="icon-btn" onClick={logout}>خروج</button></div></header>
+    <header className="top"><div><p>فرع أبو زهرة — {todayStr()} — {role==="manager"?"مدير":"موظف"}: {currentUserName||"—"}</p><h1>🍒 كرز وعنب</h1></div><div className="counter"><strong>{enteredCount}/{allItems.length}</strong><span>تم إدخاله</span><button className="icon-btn" onClick={logout}>خروج</button></div></header>
     <div className="progress"><span style={{width:`${allItems.length?(enteredCount/allItems.length)*100:0}%`}}/></div>
     <nav className="tabs">{tabs.map(t=><button key={t.key} className={activeTab===t.key?"active":""} onClick={()=>setActiveTab(t.key)}>{t.label}{!!t.badge&&<em>{t.badge}</em>}</button>)}</nav>
     <section className="content">
-      {activeTab==="جرد"&&<><div className="note">شاشة الموظف: أدخل أرقام الجرد. حفظ = مسودة للرجوع لاحقًا. إرسال للمدير = إرسال للإدارة وتصفير الشاشة.</div>{Object.entries(sections).map(([sk,sec])=>{ const isOpen=openSection===sk; const ent=sec.items.filter(it=>quantities[sk]?.[it.id]!=="").length; return <div className="section-card" key={sk}><button className="section-head" style={{borderColor:sec.color}} onClick={()=>setOpenSection(isOpen?"":sk)}><span className="emoji">{sec.icon}</span><span><strong style={{color:sec.color}}>{sk}</strong><small>{ent}/{sec.items.length} صنف</small></span><b>{isOpen?"⌃":"⌄"}</b></button>{isOpen&&<div className="items">{sec.items.map(it=>{ const v=quantities[sk]?.[it.id]??""; const st=getStatus(v,it.minQty); return <div className={`item ${st}`} key={it.id}><div><strong>{it.name}</strong><small>{it.unit} — حد أدنى {it.minQty}</small></div><input inputMode="decimal" type="number" value={v} placeholder="العدد" onChange={e=>setQty(sk,it.id,e.target.value)}/></div>; })}</div>}</div>; })}</>}
+      {activeTab==="جرد"&&<><div className="note">شاشة الموظف: أدخل أرقام الجرد. حفظ = مسودة للرجوع لاحقًا. إرسال للمدير = إرسال للإدارة وتصفير الشاشة.</div>{Object.entries(sections).map(([sk,sec])=>{ const isOpen=openSection===sk; const ent=sec.items.filter(it=>quantities[sk]?.[it.id]!=="").length; return <div className="section-card" key={sk}><button className="section-head" style={{borderColor:sec.color}} onClick={()=>setOpenSection(isOpen?"":sk)}><span className="emoji">{sec.icon}</span><span><strong style={{color:sec.color}}>{sk}</strong><small>{ent}/{sec.items.length} صنف</small></span><b>{isOpen?"⌃":"⌄"}</b></button>{isOpen&&<div className="items">{sec.items.map(it=>{ const v=quantities[sk]?.[it.id]??""; const st getStatus(v,it.minQty); return <div className={`item ${st}`} key={it.id}><div><strong>{it.name}</strong><small>{it.unit} — حد أدنى {it.minQty}</small></div><input inputMode="decimal" type="number" value={v} placeholder="العدد" onChange={e=>setQty(sk,it.id,e.target.value)}/></div>; })}</div>}</div>; })}</>}
       {role==="manager"&&activeTab==="الإدارة"&&<><div className="note blue">شاشة الإدارة: يظهر هنا فقط الجرد الذي يحتاج إجراء. بعد اطلعت أو حفظ لقطة المدير ينتقل مباشرة إلى السجل.</div>{pending.length===0?<div className="empty">لا توجد جرود بانتظار الإدارة</div>:pending.map(s=><ManagerSnapshot key={s.firestoreId||s.id} snap={s} onDone={loadHistory}/>)}</>}
       {role==="manager"&&activeTab==="السجل"&&<><div className="note">السجل: فقط الجرود التي اعتمدها المدير. يظهر رقم الموظف ورقم طلب المدير إن وجد.</div>{reviewed.length===0?<div className="empty">لا توجد جرود معتمدة في السجل بعد</div>:reviewed.map(s=><SnapshotCard key={s.firestoreId||s.id} snap={s}/>)}</>}
-      {role==="manager"&&activeTab==="إعدادات"&&<div><div className="note">إدارة الأقسام والأصناف: إضافة قسم، إضافة صنف، تعديل الحد الأدنى، وحذف.</div>{Object.entries(sections).map(([sk,sec])=><div className="card" key={sk}><div className="supplier-head"><button onClick={()=>setSettingsOpen(settingsOpen===sk?null:sk)}><span>{sec.icon} {sk}</span></button><button onClick={()=>deleteSection(sk)}>حذف القسم</button></div>{settingsOpen===sk&&<div className="modal-content">{sec.items.map(it=><div className="row" key={it.id}><span>{it.name} ({it.unit})</span><input type="number" value={it.minQty} onChange={e=>editMin(sk,it.id,e.target.value)} style={{width:65,borderRadius:8,padding:5,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55"}}/><button onClick={()=>deleteItem(sk,it.id)}>حذف</button></div>)}<div className="summary"><input placeholder="اسم الصنف" value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))}/><select value={newItem.unit} onChange={e=>setNewItem(p=>({...p,unit:e.target.value}))}>{["حبة","كجم","لتر","علبة","باكيت","قالب","ربطة"].map(u=><option key={u}>{u}</option>)}</select><input type="number" value={newItem.minQty} onChange={e=>setNewItem(p=>({...p,minQty:e.target.value}))}/><button className="primary" onClick={()=>addItem(sk)}>إضافة صنف</button></div></div>}</div>)}{addingSec?<div className="card modal-content"><input placeholder="اسم القسم" value={newSec.name} onChange={e=>setNewSec(p=>({...p,name:e.target.value}))}/><input placeholder="الأيقونة" value={newSec.icon} onChange={e=>setNewSec(p=>({...p,icon:e.target.value}))}/><input type="color" value={newSec.color} onChange={e=>setNewSec(p=>({...p,color:e.target.value}))}/><button className="primary wide" onClick={addSection}>إضافة القسم</button></div>:<button className="secondary wide" onClick={()=>setAddingSec(true)}>+ إضافة قسم جديد</button>}</div>}
+      {role==="manager"&&activeTab==="إعدادات"&&<div><UserManagement users={allUsers} onAddUser={addUser} onUpdatePassword={updateUserPassword}/><div className="note">إدارة الأقسام والأصناف: إضافة قسم، إضافة صنف، تعديل الحد الأدنى، وحذف.</div>{Object.entries(sections).map(([sk,sec])=><div className="card" key={sk}><div className="supplier-head"><button onClick={()=>setSettingsOpen(settingsOpen===sk?null:sk)}><span>{sec.icon} {sk}</span></button><button onClick={()=>deleteSection(sk)}>حذف القسم</button></div>{settingsOpen===sk&&<div className="modal-content">{sec.items.map(it=><div className="row" key={it.id}><span>{it.name} ({it.unit})</span><input type="number" value={it.minQty} onChange={e=>editMin(sk,it.id,e.target.value)} style={{width:65,borderRadius:8,padding:5,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55"}}/><button onClick={()=>deleteItem(sk,it.id)}>حذف</button></div>)}<div className="summary"><input placeholder="اسم الصنف" value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))}/><select value={newItem.unit} onChange={e=>setNewItem(p=>({...p,unit:e.target.value}))}>{["حبة","كجم","لتر","علبة","باكيت","قالب","ربطة"].map(u=><option key={u}>{u}</option>)}</select><input type="number" value={newItem.minQty} onChange={e=>setNewItem(p=>({...p,minQty:e.target.value}))}/><button className="primary" onClick={()=>addItem(sk)}>إضافة صنف</button></div></div>}</div>)}{addingSec?<div className="card modal-content"><input placeholder="اسم القسم" value={newSec.name} onChange={e=>setNewSec(p=>({...p,name:e.target.value}))}/><input placeholder="الأيقونة" value={newSec.icon} onChange={e=>setNewSec(p=>({...p,icon:e.target.value}))}/><input type="color" value={newSec.color} onChange={e=>setNewSec(p=>({...p,color:e.target.value}))}/><button className="primary wide" onClick={addSection}>إضافة القسم</button></div>:<button className="secondary wide" onClick={()=>setAddingSec(true)}>+ إضافة قسم جديد</button>}</div>}
     </section>
     {activeTab==="جرد"&&<footer className="bottom"><button className="secondary" disabled={loading} onClick={saveDraft}>💾 حفظ</button><button className="primary" disabled={loading} onClick={()=>setSendOpen(true)}>📤 إرسال للمدير</button></footer>}
-    {sendOpen&&<Modal title="إرسال الجرد للمدير" onClose={()=>setSendOpen(false)}><div className="modal-content"><p>سيتم إرسال لقطة كاملة من شاشة الجرد للإدارة، ثم تصفير شاشة الموظف.</p><button className="primary wide" disabled={loading} onClick={submitToManager}>تأكيد الإرسال</button></div></Modal>}
+    {sendOpen&&<Modal title="إرسال الجرد للمدير" onClose={()=>setSendOpen(false)}><div className="modal-content"><p>اكتب ملاحظة اختيارية للمدير قبل الإرسال.</p><textarea placeholder="ملاحظات للمدير: مثال نقص واضح، تلف، صنف غير موجود..." value={employeeNote} onChange={e=>setEmployeeNote(e.target.value)} style={{width:"100%",minHeight:90,borderRadius:12,padding:10,background:"#0F1117",color:"#fff",border:"1px solid #C8A96E55",fontFamily:"inherit"}}/><p>سيتم إرسال لقطة كاملة من شاشة الجرد للإدارة، ثم تصفير شاشة الموظف.</p><button className="primary wide" disabled={loading} onClick={submitToManager}>تأكيد الإرسال</button></div></Modal>}
     {toast&&<div className="toast">{toast}</div>}
   </main>;
 }
